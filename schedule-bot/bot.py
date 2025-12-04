@@ -403,7 +403,7 @@ async def start_cmd(m: Message, state: FSMContext):
     await state.clear()
     log.info("User started: id=%s, name=%s", m.from_user.id, m.from_user.full_name)
     await m.answer(
-        "Привет! Я показываю расписание из Google Sheets и присылаю уведомления.\nВыберите свою группу:",
+        "Привет! Выберите свой класс:",
         reply_markup=groups_kb()
     )
 
@@ -905,3 +905,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         print("Stopped.")
+
