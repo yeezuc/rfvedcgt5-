@@ -217,6 +217,27 @@ def build_schedule_map(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, List[D
 def read_schedule_map() -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
     return build_schedule_map(gs_read_all(GS_SCHEDULE_SHEET))
 
+def parse_exam_date(ds: str) -> Optional[date]:
+    """
+    Parse exam date from Google Sheet.
+    Accepts: YYYY-MM-DD, DD.MM.YYYY (and a few common variations), ISO strings.
+    Returns a date or None.
+    """
+    s = (ds or "").strip()
+    if not s:
+        return None
+    # Common formats
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d.%m.%y", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y", "%Y.%m.%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except Exception:
+            pass
+    # ISO 8601 fallback (can include time part)
+    try:
+        return datetime.fromisoformat(s).date()
+    except Exception:
+        return None
+
 def read_exams_map() -> Dict[str, List[Dict[str, Any]]]:
     rows = gs_read_all(GS_EXAMS_SHEET)
     res: Dict[str, List[Dict[str, Any]]] = {}
@@ -227,19 +248,21 @@ def read_exams_map() -> Dict[str, List[Dict[str, Any]]]:
         subj = str(r.get("subject", "")).strip()
         note = str(r.get("note", "")).strip()
         if g in GROUPS and ds and subj:
-            try:
-                d = datetime.strptime(ds, "%Y-%m-%d").date()
-            except Exception:
-                try:
-                    d = datetime.fromisoformat(ds).date()
-                except Exception:
-                    continue
+            d = parse_exam_date(ds)
+            if not d:
+                continue
+            # Keep both: human-readable for UI and ISO for sorting/filtering/hash stability
             res.setdefault(g, []).append({
-                "date": d.isoformat(), "time": tm, "subject": subj, "note": note
+                "date": d.strftime("%d.%m.%Y"),
+                "date_iso": d.isoformat(),
+                "time": tm,
+                "subject": subj,
+                "note": note
             })
     for g in res:
-        res[g].sort(key=lambda x: (x["date"], x.get("time", "")))
+        res[g].sort(key=lambda x: (x.get("date_iso", ""), x.get("time", "")))
     return res
+
 
 def format_lessons(lessons: List[Dict[str, Any]]) -> str:
     if not lessons:
@@ -256,15 +279,19 @@ def format_lessons(lessons: List[Dict[str, Any]]) -> str:
     return "\n".join(out)
 
 def exams_for_range(exams: List[Dict[str, Any]], start: date, end: date) -> List[Dict[str, Any]]:
-    out = []
+    out: List[Dict[str, Any]] = []
     for x in exams:
-        try:
-            d = datetime.strptime(x["date"], "%Y-%m-%d").date()
-        except Exception:
+        # Prefer ISO for reliable parsing/sorting, but accept "DD.MM.YYYY" too
+        d = parse_exam_date(str(x.get("date_iso") or x.get("date") or ""))
+        if not d:
             continue
         if start <= d <= end:
-            out.append(x)
-    return sorted(out, key=lambda x: (x["date"], x.get("time", "")))
+            y = dict(x)
+            y.setdefault("date_iso", d.isoformat())
+            y.setdefault("date", d.strftime("%d.%m.%Y"))
+            out.append(y)
+    return sorted(out, key=lambda x: (x.get("date_iso", ""), x.get("time", "")))
+
 
 def week_range_str(monday: date) -> str:
     return f"{monday:%d.%m}–{(monday + timedelta(days=6)):%d.%m}"
@@ -521,8 +548,14 @@ def format_exams(items: List[Dict[str, Any]], title: str) -> str:
     for i, x in enumerate(items, start=1):
         t = f" — {x['time']}" if x.get("time") else ""
         note = f"\n   ⤷ {x['note']}" if x.get("note") else ""
-        parts.append(f"{i}. {x['date']}{t}: {x['subject']}{note}")
+        # date in UI: DD.MM.YYYY
+        ds = str(x.get("date") or "")
+        if not ds:
+            d = parse_exam_date(str(x.get("date_iso") or ""))
+            ds = d.strftime("%d.%m.%Y") if d else ""
+        parts.append(f"{i}. {ds}{t}: {x['subject']}{note}")
     return "\n".join(parts)
+
 
 @router.message(Command("exams"))
 async def cmd_exams(m: Message, state: FSMContext):
